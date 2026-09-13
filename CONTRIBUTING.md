@@ -28,7 +28,8 @@ python3 -m unittest discover -s test    # must be green before you touch anythin
 ```
 
 Tests run fully offline: each case spins `lab_server.py` on an ephemeral
-127.0.0.1 port. Never point tests or scripts at external hosts.
+127.0.0.1 port. Never point tests or scripts at external hosts. The crawler
+re-checks scope on every hop — keep it that way.
 
 ## Adding a check
 

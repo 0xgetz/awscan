@@ -28,6 +28,68 @@ class LabCase(unittest.TestCase):
         return Session(delay=DELAY)
 
 
+class NewChecks2026(LabCase):
+    """v1.1 technique battery, each with a positive and (where meaningful) negative test."""
+
+    def test_ssti_positive(self):
+        f = checks.check_ssti(self.target("/page", "tpl"), self.sess())
+        self.assertIsNotNone(f)
+        self.assertEqual(f["check"], "Server-side template injection")
+
+    def test_ssti_negative_raw_echo(self):
+        # /echo reflects the probe verbatim (never computes it) -> not SSTI
+        self.assertIsNone(checks.check_ssti(self.target("/echo"), self.sess()))
+
+    def test_host_header_injection(self):
+        f = checks.check_host_header(self.base, self.sess(), "abc123")
+        self.assertIsNotNone(f)
+        self.assertIn("awhost-abc123.example.com", f["vectors"]["header"])
+
+    def test_time_blind(self):
+        orig = checks.TIME_PAYLOADS
+        checks.TIME_PAYLOADS = ["'; select pg_sleep(2) -- "]  # one payload to keep suite fast
+        try:
+            f = checks.check_time_blind(self.target(), self.sess())
+        finally:
+            checks.TIME_PAYLOADS = orig
+        self.assertIsNotNone(f)
+        self.assertTrue(f["manual_verify"])
+
+    def test_forbidden_bypass_xff(self):
+        f = checks.check_forbidden_bypass(self.sess(), self.base + "/admin")
+        self.assertIsNotNone(f)
+        self.assertEqual(f["check"], "403 bypass")
+        self.assertIn("X-Forwarded-For", f["vectors"]["header"])
+
+    def test_graphql_introspection(self):
+        f = checks.check_graphql(self.base, self.sess())
+        self.assertIsNotNone(f)
+        self.assertIn("/graphql", f["vectors"]["endpoint"])
+
+    def test_js_secrets_masked(self):
+        sess = self.sess()
+        f = checks.check_js_secrets(sess, self.base, {self.base + "/static/app.js"})
+        self.assertIsNotNone(f)
+        types = {s["type"] for s in f["secrets"]}
+        self.assertIn("AWS access key", types)
+        self.assertIn("JWT", types)
+        for s in f["secrets"]:
+            self.assertIn("…", s["match"])  # never a full secret on disk
+
+    def test_crawler_discovers_surfaces_and_forbidden(self):
+        from awscan.crawl import crawl
+        hosts = scope.load_scope(os.path.join(os.path.dirname(__file__), "..", "scope.example.txt"))
+        sess = self.sess()
+        pages, bases, forbidden = crawl(self.base, sess, hosts)
+        self.assertIn(self.base + "/login", pages)
+        self.assertTrue(any("q=TEST" in b for b in bases))
+        self.assertTrue(any("tpl=TEST" in b for b in bases))
+        self.assertIn(self.base + "/admin", forbidden)
+
+    def test_waf_clean_on_lab(self):
+        self.assertIsNone(checks.check_waf(self.base, self.sess()))
+
+
 class ScopeGate(LabCase):
     def test_wildcard_match(self):
         hosts = scope.load_scope(os.path.join(os.path.dirname(__file__), "..", "scope.example.txt"))
@@ -129,8 +191,8 @@ class Reports(LabCase):
     def test_write_reports_files(self):
         with tempfile.TemporaryDirectory() as d:
             rep = report.build_report("t", "s", [], 0.1, 3)
-            j, m = report.write_reports(rep, d)
-            self.assertTrue(os.path.exists(j) and os.path.exists(m))
+            j, m, sa = report.write_reports(rep, d)
+            self.assertTrue(os.path.exists(j) and os.path.exists(m) and os.path.exists(sa))
             self.assertIn("findings", json.load(open(j)))
 
 
@@ -158,15 +220,35 @@ class CliE2E(LabCase):
             for sub in ("r1", "r2"):
                 rdir = os.path.join(d, sub)
                 files = os.listdir(rdir)
-                self.assertEqual(len(files), 2)
+                self.assertEqual(len(files), 3)  # json + md + sarif
                 jpath = next(os.path.join(rdir, f) for f in files if f.endswith(".json"))
                 j = json.load(open(jpath))
                 names += [f["check"] for f in j["findings"]]
+                sarif = json.load(open(next(os.path.join(rdir, f) for f in files if f.endswith(".sarif"))))
+                self.assertEqual(sarif["version"], "2.1.0")
+                self.assertTrue(all("ruleId" in r for r in sarif["runs"][0]["results"]))
                 if sub == "r1":
                     blind = next(f for f in j["findings"] if "blind" in f["check"].lower())
                     self.assertEqual(blind["extracted"], "demo-flag-xk41-7f")
             for want in ("SQL injection", "Reflected XSS", "Open redirect", "Exposed paths"):
                 self.assertIn(want, names)
+
+    def test_crawl_mode_end_to_end(self):
+        """--crawl with no manual target: surfaces discovered by the crawler."""
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "scope.txt")
+            open(good, "w").write("127.0.0.1\n")
+            code = main(["--crawl", "--root", self.base, "--scope", good, "--delay", "0",
+                         "--out", os.path.join(d, "rc")])
+            self.assertEqual(code, 0)
+            jpath = next(os.path.join(d, "rc", f) for f in os.listdir(os.path.join(d, "rc")) if f.endswith(".json"))
+            j = json.load(open(jpath))
+            names = {f["check"] for f in j["findings"]}
+            for want in ("SQL injection", "Server-side template injection", "Open redirect",
+                         "Host header injection", "403 bypass", "GraphQL introspection enabled",
+                         "Secrets in JavaScript", "Exposed paths"):
+                self.assertIn(want, names)
+            self.assertGreaterEqual(j["pages_crawled"], 4)
 
     def test_missing_placeholder_rejected(self):
         with tempfile.TemporaryDirectory() as d:

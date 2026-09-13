@@ -3,9 +3,13 @@ import http.client
 import socket
 import ssl
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from urllib.error import HTTPError
+from urllib.request import Request, build_opener
+
+MAX_BODY = 512_000  # cap response reads — a scanner must never OOM on a giant page
+UA = "Mozilla/5.0 (awscan/1.1 authorized-testing)"
 
 
 @dataclass
@@ -33,14 +37,15 @@ class Session:
     -1 timeout, -2 remote disconnect, -3 connection/DNS error.
     """
 
-    def __init__(self, delay=1.0, timeout=15, ua="Mozilla/5.0 (awscan/1.0)"):
-        self.delay, self.timeout, self.ua = delay, timeout, ua
+    def __init__(self, delay=1.0, timeout=15, ua=UA, headers=None):
+        self.delay, self.timeout = delay, timeout
+        self.base_headers = {"User-Agent": ua, "Accept-Language": "en", "Accept": "*/*"}
+        if headers:
+            self.base_headers.update(headers)  # hunter auth: Cookie / Authorization / custom
         self._last = 0.0
         self.requests = 0
-        opener = urllib.request.build_opener(
+        self._opener = build_opener(
             _NoRedirect, urllib.request.HTTPSHandler(context=_CTX))
-        opener.addheaders = [("User-Agent", ua), ("Accept-Language", "en")]
-        self._opener = opener
 
     def _pace(self):
         gap = time.time() - self._last
@@ -48,19 +53,44 @@ class Session:
             time.sleep(self.delay - gap)
         self._last = time.time()
 
-    def fetch(self, url):
+    @staticmethod
+    def _resp(code, headers, raw):
+        return Response(code, {k.lower(): v for k, v in (headers or {}).items()},
+                        raw[:MAX_BODY].decode("utf-8", "replace"))
+
+    def fetch(self, url, headers=None):
         self._pace()
         self.requests += 1
+        req = Request(url, headers={**self.base_headers, **(headers or {})})
         try:
-            with self._opener.open(url, timeout=self.timeout) as r:
-                return Response(r.status, {k.lower(): v for k, v in r.headers.items()},
-                                r.read().decode("utf-8", "replace"))
-        except urllib.error.HTTPError as e:
-            return Response(e.code, {k.lower(): v for k, v in (e.headers or {}).items()},
-                            e.read().decode("utf-8", "replace"))
+            with self._opener.open(req, timeout=self.timeout) as r:
+                return self._resp(r.status, r.headers, r.read())
+        except HTTPError as e:
+            return self._resp(e.code, e.headers, e.read())
         except (socket.timeout, TimeoutError):
             return Response(-1)
         except http.client.RemoteDisconnected:
             return Response(-2)
+        except Exception:
+            return Response(-3)
+
+    def timed_fetch(self, url, headers=None):
+        """fetch + wall-clock latency — the currency of time-based detection."""
+        t0 = time.monotonic()
+        r = self.fetch(url, headers)
+        return r, time.monotonic() - t0
+
+    def post(self, url, body, ctype="application/json"):
+        self._pace()
+        self.requests += 1
+        req = Request(url, data=body.encode("utf-8"),
+                      headers={**self.base_headers, "Content-Type": ctype})
+        try:
+            with self._opener.open(req, timeout=self.timeout) as r:
+                return self._resp(r.status, r.headers, r.read())
+        except HTTPError as e:
+            return self._resp(e.code, e.headers, e.read())
+        except (socket.timeout, TimeoutError):
+            return Response(-1)
         except Exception:
             return Response(-3)
