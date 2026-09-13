@@ -1,0 +1,6 @@
+# Authorized hosts only — one per line. "*.example.com" = wildcard subdomains.
+# Local lab targets are loopback; anything else must be your own asset or a
+# bug-bounty program host you have written/program authorization for.
+127.0.0.1
+localhost
+# example: *.target-program.com

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+reports/
+*.egg-info/
+build/
+dist/
+.venv/
+my-scope.txt
