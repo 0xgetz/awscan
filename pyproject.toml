@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "awscan"
 version = "1.1.0"
-description = "Automated web vulnerability scanner for authorized security testing — zero dependencies, stdlib only"
+description = "Automated web vulnerability scanner for authorized security testing. Zero dependencies, Python stdlib only."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
