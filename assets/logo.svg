@@ -3,12 +3,12 @@
        Brackets = the hard scope gate; rings/sweep = the scanner; dot = a confirmed finding. -->
   <rect width="512" height="512" rx="104" fill="#12181F"/>
 
-  <!-- corner brackets (scope gate) -->
+  <!-- corner brackets (scope gate), inset clear of the rounded tile corners -->
   <g stroke="#DDE4EC" stroke-width="22" stroke-linecap="round" fill="none">
-    <path d="M100 168 L100 100 L168 100"/>
-    <path d="M344 100 L412 100 L412 168"/>
-    <path d="M412 344 L412 412 L344 412"/>
-    <path d="M168 412 L100 412 L100 344"/>
+    <path d="M126 186 L126 126 L186 126"/>
+    <path d="M326 126 L386 126 L386 186"/>
+    <path d="M386 326 L386 386 L326 386"/>
+    <path d="M186 386 L126 386 L126 326"/>
   </g>
 
   <!-- radar rings -->
